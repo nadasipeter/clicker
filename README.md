@@ -6,7 +6,39 @@ and Google Chrome or Microsoft Edge. On macOS, install the browser in
 
 ## Install (macOS)
 
-From this repository directory:
+### 1. Install Python
+
+1. Open the official [Python downloads for macOS](https://www.python.org/downloads/macos/)
+   and download a stable Python 3 installer (Python 3.10 or newer).
+2. Open the downloaded `.pkg` file and follow the installation steps. The
+   universal2 installer supports both Apple Silicon and Intel Macs.
+3. Open a new **Terminal** window (Applications → Utilities → Terminal) and check:
+
+   ```sh
+   python3 --version
+   python3 -m pip --version
+   ```
+
+   The Python version should be 3.10 or newer. If `python3` is not found, close
+   and reopen Terminal after completing the installer.
+
+If you already use [Homebrew](https://brew.sh/), you can install Python with
+`brew install python` instead, then run the version checks above.
+
+If you encounter certificate verification errors with the python.org installation,
+run `Install Certificates.command` from its versioned Python folder in
+`/Applications`, then retry the failed command.
+
+### 2. Install the app dependencies
+
+Download or clone this repository, then open Terminal in its directory. For
+example, if you downloaded it to `~/Downloads/clicker-main`:
+
+```sh
+cd ~/Downloads/clicker-main
+```
+
+Create and activate a virtual environment, then install the dependencies:
 
 ```sh
 python3 -m venv .venv
@@ -16,6 +48,9 @@ python -m pip install -r requirements.txt
 
 No browser driver or Playwright browser download is required: the app uses your
 installed browser.
+
+In each new Terminal window, return to the repository directory and run
+`source .venv/bin/activate` before using the commands below.
 
 ## Run
 
