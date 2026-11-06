@@ -100,6 +100,14 @@ passwords, and managed settings may not transfer; sign in again if necessary.
 The copy contains private browser data, so treat it like your original profile.
 Do not run two clickers using the same automation profile simultaneously.
 
+If your profile is in Edge, include `--browser edge`; otherwise Chrome is chosen
+when both browsers are installed. The app reads profile names from `Local State`
+and falls back to each profile's `Preferences` file when needed. Errors identify
+the selected browser and missing or unreadable metadata; a name mismatch lists
+the names found. For a missing data directory, open `edge://version` in Edge (or
+`chrome://version` in Chrome) and check **Profile Path**. Custom data directories
+and Beta/Dev/Canary browser editions are not currently supported.
+
 ## Verify
 
 ```sh

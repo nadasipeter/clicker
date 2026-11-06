@@ -52,6 +52,42 @@ def find_browser(browser_name=None):
     raise RuntimeError("No supported browser found. Install Google Chrome or Microsoft Edge in /Applications.")
 
 
+def read_profile_names(source, brand):
+    state_path = source / "Local State"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"{brand.title()} profile data was not found at {state_path}. "
+            "For Edge use --browser edge. In the selected browser open "
+            "edge://version or chrome://version and check Profile Path."
+        ) from exc
+    except PermissionError as exc:
+        raise RuntimeError(f"Permission denied reading {state_path}. Check macOS file permissions.") from exc
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Cannot read valid profile metadata from {state_path} ({type(exc).__name__}).") from exc
+    if not isinstance(state, dict):
+        raise RuntimeError(f"Invalid profile metadata format in {state_path}.")
+    profile = state.get("profile", {})
+    cache = profile.get("info_cache", {}) if isinstance(profile, dict) else {}
+    names = {directory: info["name"] for directory, info in cache.items()
+             if isinstance(info, dict) and isinstance(info.get("name"), str)} if isinstance(cache, dict) else {}
+    # Some browser versions omit the shared cache but retain names in Preferences.
+    for candidate in source.iterdir():
+        if candidate.name != "Default" and not candidate.name.startswith("Profile "):
+            continue
+        if candidate.name in names or not candidate.is_dir():
+            continue
+        try:
+            preferences = json.loads((candidate / "Preferences").read_text(encoding="utf-8"))
+            name = preferences["profile"]["name"]
+            if isinstance(name, str):
+                names[candidate.name] = name
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return names
+
+
 def prepare_profile(executable, name):
     """Resolve a macOS display name and seed a separate persistent data directory."""
     if sys.platform != "darwin":
@@ -59,14 +95,12 @@ def prepare_profile(executable, name):
     brand = "edge" if "edge" in executable.lower() else "chrome"
     support = Path.home() / "Library" / "Application Support"
     source = support / ("Microsoft Edge" if brand == "edge" else "Google/Chrome")
-    try:
-        state = json.loads((source / "Local State").read_text())
-        profiles = state["profile"]["info_cache"]
-        matches = [directory for directory, info in profiles.items() if info.get("name") == name]
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        raise RuntimeError("Cannot read browser profile names. Open the browser and create a profile first.") from exc
+    profiles = read_profile_names(source, brand)
+    matches = [directory for directory, display_name in profiles.items() if display_name == name]
     if len(matches) != 1:
-        raise RuntimeError(f"Expected one profile named {name!r}; found {len(matches)}. Check the name in browser settings.")
+        available = ", ".join(repr(value) for value in profiles.values()) or "none"
+        raise RuntimeError(f"Expected one {brand.title()} profile named {name!r}; found {len(matches)}. "
+                           f"Available profiles: {available}. Use --browser edge for Edge profiles.")
     directory = matches[0]
     if Path(directory).name != directory or directory in (".", ".."):
         raise RuntimeError("Invalid browser profile directory.")

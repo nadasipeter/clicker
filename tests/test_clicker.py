@@ -69,6 +69,25 @@ class ProfileTest(unittest.TestCase):
         prompt.assert_not_called()
         self.assertFalse((self.home / "Library/Application Support/Clicker").exists())
 
+    def test_edge_preferences_fallback_without_info_cache(self):
+        edge = self.home / "Library/Application Support/Microsoft Edge"
+        (edge / "Default").mkdir(parents=True)
+        (edge / "Local State").write_text("{}")
+        (edge / "Default/Preferences").write_text(json.dumps({"profile": {"name": "Personal"}}))
+        with patch("builtins.input", return_value="yes"):
+            destination, directory = clicker.prepare_profile("Microsoft Edge", "Personal")
+        self.assertEqual(directory, "Default")
+        self.assertTrue((destination / "Default/Preferences").is_file())
+
+    def test_missing_metadata_identifies_browser_and_path(self):
+        with self.assertRaisesRegex(RuntimeError, "Edge profile data was not found.*Microsoft Edge/Local State"):
+            clicker.prepare_profile("Microsoft Edge", "Personal")
+
+    def test_invalid_metadata_is_distinguished_from_missing_profile(self):
+        (self.source / "Local State").write_text("{")
+        with self.assertRaisesRegex(RuntimeError, "Cannot read valid profile metadata"):
+            clicker.prepare_profile("Google Chrome", "Personal")
+
 
 class BrowserTest(unittest.TestCase):
     def test_repeated_clicks_relocate_button_and_respect_interval(self):
