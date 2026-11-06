@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
@@ -52,90 +53,6 @@ def find_browser(browser_name=None):
     raise RuntimeError("No supported browser found. Install Google Chrome or Microsoft Edge in /Applications.")
 
 
-def read_profile_names(source, brand):
-    state_path = source / "Local State"
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"{brand.title()} profile data was not found at {state_path}. "
-            "For Edge use --browser edge. In the selected browser open "
-            "edge://version or chrome://version and check Profile Path."
-        ) from exc
-    except PermissionError as exc:
-        raise RuntimeError(f"Permission denied reading {state_path}. Check macOS file permissions.") from exc
-    except (OSError, ValueError) as exc:
-        raise RuntimeError(f"Cannot read valid profile metadata from {state_path} ({type(exc).__name__}).") from exc
-    if not isinstance(state, dict):
-        raise RuntimeError(f"Invalid profile metadata format in {state_path}.")
-    profile = state.get("profile", {})
-    cache = profile.get("info_cache", {}) if isinstance(profile, dict) else {}
-    names = {directory: info["name"] for directory, info in cache.items()
-             if isinstance(info, dict) and isinstance(info.get("name"), str)} if isinstance(cache, dict) else {}
-    # Some browser versions omit the shared cache but retain names in Preferences.
-    for candidate in source.iterdir():
-        if candidate.name != "Default" and not candidate.name.startswith("Profile "):
-            continue
-        if candidate.name in names or not candidate.is_dir():
-            continue
-        try:
-            preferences = json.loads((candidate / "Preferences").read_text(encoding="utf-8"))
-            name = preferences["profile"]["name"]
-            if isinstance(name, str):
-                names[candidate.name] = name
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return names
-
-
-def prepare_profile(executable, name):
-    """Resolve a macOS display name and seed a separate persistent data directory."""
-    if sys.platform != "darwin":
-        raise RuntimeError("Named profile selection currently supports macOS only.")
-    brand = "edge" if "edge" in executable.lower() else "chrome"
-    support = Path.home() / "Library" / "Application Support"
-    source = support / ("Microsoft Edge" if brand == "edge" else "Google/Chrome")
-    profiles = read_profile_names(source, brand)
-    matches = [directory for directory, display_name in profiles.items() if display_name == name]
-    if len(matches) != 1:
-        available = ", ".join(repr(value) for value in profiles.values()) or "none"
-        raise RuntimeError(f"Expected one {brand.title()} profile named {name!r}; found {len(matches)}. "
-                           f"Available profiles: {available}. Use --browser edge for Edge profiles.")
-    directory = matches[0]
-    if Path(directory).name != directory or directory in (".", ".."):
-        raise RuntimeError("Invalid browser profile directory.")
-    if not (source / directory).is_dir():
-        raise RuntimeError("The selected browser profile directory is missing.")
-    try:
-        response = input(
-            "Save your work and quit ALL Chrome and Edge instances (Cmd+Q), "
-            "including background instances.\n"
-            "The app will use a separate persistent copy of the selected profile; "
-            "you may need to sign in again.\n"
-            "Type yes when all instances are closed, or anything else to cancel: "
-        )
-    except EOFError as exc:
-        raise RuntimeError("Profile mode requires confirmation in an interactive terminal.") from exc
-    if response.strip().lower() != "yes":
-        raise RuntimeError("Cancelled; no browser was opened.")
-    destination = support / "Clicker" / brand / directory
-    if not destination.exists():
-        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        staging = destination.with_name(directory + ".initializing")
-        if staging.exists():
-            raise RuntimeError(f"An incomplete profile copy exists at {staging}. Remove it before retrying.")
-        try:
-            staging.mkdir(mode=0o700)
-            shutil.copy2(source / "Local State", staging / "Local State")
-            shutil.copytree(source / directory, staging / directory,
-                            ignore=shutil.ignore_patterns("Singleton*", "Cache", "Code Cache", "GPUCache"))
-            staging.rename(destination)
-        except OSError:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
-    return destination, directory
-
-
 def click_repeatedly(page, label, interval):
     # A locator is resolved again on every click, including after page updates.
     button = page.get_by_role("button", name=label, exact=True)
@@ -148,28 +65,102 @@ def click_repeatedly(page, label, interval):
         time.sleep(interval)
 
 
+def native_click_script(label):
+    # JSON encoding keeps labels out of executable JavaScript syntax.
+    return """(() => {
+      const normalize = s => s.replace(/\\s+/g, ' ').trim();
+      const label = normalize(LABEL);
+      const buttons = [...document.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]')]
+        .filter(b => b.getClientRects().length && getComputedStyle(b).visibility !== 'hidden')
+        .filter(b => {
+          const ids = (b.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean);
+          const referenced = ids.map(id => document.getElementById(id)?.textContent || '').join(' ');
+          return normalize(referenced || b.getAttribute('aria-label') || b.value || b.textContent || '') === label;
+        });
+      if (buttons.length > 1) return 'ambiguous';
+      if (!buttons.length || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return 'waiting';
+      buttons[0].click(); return 'clicked';
+    })()""".replace("LABEL", json.dumps(label))
+
+
+def run_applescript(script, *arguments):
+    result = subprocess.run(["osascript", "-e", script, "--", *arguments],
+                            capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(
+            "Browser scripting failed. Enable View > Developer > Allow JavaScript "
+            "from Apple Events in the browser, and allow Terminal to control it "
+            "in macOS Privacy & Security > Automation. " + result.stderr.strip()
+        )
+    return result.stdout.strip()
+
+
+def run_native(executable, url, label, interval, profile_name=None):
+    app = "Microsoft Edge" if "edge" in executable.lower() else "Google Chrome"
+    # LaunchServices opens the regular browser, preserving its own profile handling.
+    subprocess.run(["open", "-a", app, url], check=True)
+    selection = f" Switch to your {profile_name!r} profile and open the target URL there." if profile_name else ""
+    try:
+        input(f"{app} opened normally.{selection}\n"
+              f"Make {url} the active tab in the correct profile, then press Enter. "
+              "Ctrl+C cancels: ")
+    except EOFError as exc:
+        raise RuntimeError("Native mode requires an interactive terminal to confirm the target tab.") from exc
+    # App names are fixed constants; user-supplied JavaScript is passed as argv.
+    target = run_applescript(f'tell application "{app}" to return {{id of front window, id of active tab of front window}}')
+    window_id, tab_id = [str(int(part.strip())) for part in target.split(",")]
+    script = f'''on run argv
+      tell application "{app}"
+        repeat with w in windows
+          if (id of w as text) is item 1 of argv then
+            repeat with t in tabs of w
+              if (id of t as text) is item 2 of argv then
+                return execute t javascript (item 3 of argv)
+              end if
+            end repeat
+          end if
+        end repeat
+      end tell
+      return "closed"
+    end run'''
+    count = 0
+    deadline = time.monotonic() + 30
+    while True:
+        result = run_applescript(script, window_id, tab_id, native_click_script(label))
+        if result == "closed":
+            return
+        if result == "ambiguous":
+            raise RuntimeError("Multiple buttons match the label; use a unique label.")
+        if result == "clicked":
+            count += 1
+            print(f"Clicked {label!r} ({count})", flush=True)
+            time.sleep(interval)
+            deadline = time.monotonic() + 30
+        elif result == "waiting" and time.monotonic() < deadline:
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("The target button was not ready within 30 seconds.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Open a site and repeatedly click a button. Press Ctrl+C to stop.")
     parser.add_argument("site_url", type=site_url)
     parser.add_argument("button_label", help="Exact accessible button name (usually its visible text)")
     parser.add_argument("interval", type=positive_interval, help="Seconds between clicks, e.g. 1 or 2.5")
-    parser.add_argument("--profile", help="Exact macOS browser profile display name; uses a persistent automation copy")
+    parser.add_argument("--profile", help="Profile display name; macOS native mode asks you to select it in the browser")
     parser.add_argument("--browser", choices=("chrome", "edge"), help="Choose Chrome or Edge (default: first installed)")
     args = parser.parse_args(argv)
     if not args.button_label.strip():
         parser.error("button label must not be empty")
     try:
         executable = find_browser(args.browser)
-        profile = prepare_profile(executable, args.profile) if args.profile else None
+        if sys.platform == "darwin":
+            run_native(executable, args.site_url, args.button_label, args.interval, args.profile)
+            return 0
+        if args.profile:
+            raise RuntimeError("Named profiles are supported on macOS only.")
         with sync_playwright() as playwright:
-            if profile:
-                data_directory, profile_directory = profile
-                browser = playwright.chromium.launch_persistent_context(
-                    str(data_directory), executable_path=executable, headless=False,
-                    args=[f"--profile-directory={profile_directory}"],
-                )
-            else:
-                browser = playwright.chromium.launch(executable_path=executable, headless=False)
+            browser = playwright.chromium.launch(executable_path=executable, headless=False)
             try:
                 page = browser.new_page()
                 page.goto(args.site_url, wait_until="domcontentloaded")
@@ -180,7 +171,7 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\nStopped.")
         return 0
-    except (Error, RuntimeError, OSError) as exc:
+    except (Error, RuntimeError, OSError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 0

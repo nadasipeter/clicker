@@ -1,5 +1,4 @@
 import argparse
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,61 +31,23 @@ class ArgumentsTest(unittest.TestCase):
                 self.assertEqual(clicker.find_browser(), str(edge))
 
 
-class ProfileTest(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.home = Path(temporary.name)
-        self.source = self.home / "Library/Application Support/Google/Chrome"
-        (self.source / "Profile 1").mkdir(parents=True)
-        (self.source / "Local State").write_text(json.dumps({
-            "profile": {"info_cache": {"Profile 1": {"name": "Personal"}}}
-        }))
-        (self.source / "Profile 1/Preferences").write_text("original")
-        for target, value in (("clicker.sys.platform", "darwin"), ("clicker.Path.home", self.home)):
-            mock = patch(target, return_value=value) if target.endswith("home") else patch(target, value)
-            mock.start()
-            self.addCleanup(mock.stop)
+class NativeTest(unittest.TestCase):
+    def test_native_open_uses_normal_browser_and_pins_tab(self):
+        with patch("clicker.subprocess.run") as launch, patch("builtins.input", return_value="") as prompt, patch(
+            "clicker.run_applescript", side_effect=["42, 7", "clicked", "closed"]
+        ) as script, patch("clicker.time.sleep"):
+            clicker.run_native("Microsoft Edge", "https://example.com", 'Say "Hi"', 1, "Personal")
+        launch.assert_called_once_with(["open", "-a", "Microsoft Edge", "https://example.com"], check=True)
+        self.assertIn("Personal", prompt.call_args.args[0])
+        self.assertEqual(script.call_args.args[1:3], ("42", "7"))
 
-    def test_copy_is_persistent_and_source_is_unchanged(self):
-        with patch("builtins.input", return_value="yes") as prompt:
-            destination, directory = clicker.prepare_profile("Google Chrome", "Personal")
-        self.assertIn("quit ALL Chrome and Edge", prompt.call_args.args[0])
-        self.assertEqual(directory, "Profile 1")
-        copied = destination / directory / "Preferences"
-        self.assertEqual(copied.read_text(), "original")
-        copied.write_text("automation changes")
-        with patch("builtins.input", return_value="yes"):
-            self.assertEqual(clicker.prepare_profile("Google Chrome", "Personal"), (destination, directory))
-        self.assertEqual(copied.read_text(), "automation changes")
-        self.assertEqual((self.source / directory / "Preferences").read_text(), "original")
-
-    def test_cancel_and_missing_name_create_no_copy(self):
-        with patch("builtins.input", return_value="no"), self.assertRaisesRegex(RuntimeError, "Cancelled"):
-            clicker.prepare_profile("Google Chrome", "Personal")
-        with patch("builtins.input") as prompt, self.assertRaisesRegex(RuntimeError, "found 0"):
-            clicker.prepare_profile("Google Chrome", "Missing")
-        prompt.assert_not_called()
-        self.assertFalse((self.home / "Library/Application Support/Clicker").exists())
-
-    def test_edge_preferences_fallback_without_info_cache(self):
-        edge = self.home / "Library/Application Support/Microsoft Edge"
-        (edge / "Default").mkdir(parents=True)
-        (edge / "Local State").write_text("{}")
-        (edge / "Default/Preferences").write_text(json.dumps({"profile": {"name": "Personal"}}))
-        with patch("builtins.input", return_value="yes"):
-            destination, directory = clicker.prepare_profile("Microsoft Edge", "Personal")
-        self.assertEqual(directory, "Default")
-        self.assertTrue((destination / "Default/Preferences").is_file())
-
-    def test_missing_metadata_identifies_browser_and_path(self):
-        with self.assertRaisesRegex(RuntimeError, "Edge profile data was not found.*Microsoft Edge/Local State"):
-            clicker.prepare_profile("Microsoft Edge", "Personal")
-
-    def test_invalid_metadata_is_distinguished_from_missing_profile(self):
-        (self.source / "Local State").write_text("{")
-        with self.assertRaisesRegex(RuntimeError, "Cannot read valid profile metadata"):
-            clicker.prepare_profile("Google Chrome", "Personal")
+    def test_native_main_bypasses_profile_file_access(self):
+        with patch("clicker.sys.platform", "darwin"), patch("clicker.find_browser", return_value="Microsoft Edge"), patch(
+            "clicker.Path.read_text"
+        ) as prepare, patch("clicker.run_native") as native:
+            self.assertEqual(clicker.main(["https://example.com", "Refresh", "1", "--browser", "edge", "--profile", "Personal"]), 0)
+        prepare.assert_not_called()
+        native.assert_called_once_with("Microsoft Edge", "https://example.com", "Refresh", 1, "Personal")
 
 
 class BrowserTest(unittest.TestCase):
@@ -97,6 +58,9 @@ class BrowserTest(unittest.TestCase):
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=clicker.find_browser(), headless=True)
             page = browser.new_page()
+            page.set_content('<button onclick="this.textContent=\'Done\'">Say &quot;Hi&quot;</button>')
+            self.assertEqual(page.evaluate(clicker.native_click_script('Say "Hi"')), "clicked")
+            self.assertEqual(page.get_by_role("button").inner_text(), "Done")
             page.set_content('''
                 <button onclick="other++">Other</button>
                 <div id="target"></div>

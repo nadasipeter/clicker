@@ -70,43 +70,34 @@ in the main page. Duplicate names produce an error instead of clicking an
 arbitrary button. Frames and links are not searched. Each click waits up to 30
 seconds for the button to become actionable, then reports an error if it cannot.
 
-The browser opens a separate temporary session; existing browser logins are not
-shared. You can log in manually in the opened window before the button wait
-expires. Closing the window also stops clicking.
+## macOS: use your regular browser profile
 
-## Use a named profile (macOS)
+On macOS the app launches through `open -a "Microsoft Edge" <URL>` (or Google
+Chrome), using the regular browser and its existing sessions. No profile files
+are read or copied, and Full Disk Access is not required for profile discovery.
 
 ```sh
-python clicker.py "https://example.com" "Refresh" 1 --browser chrome --profile "Personal"
-python clicker.py "https://example.com" "Refresh" 1 --browser edge --profile "Work"
+python clicker.py "https://example.com" "Refresh" 1 --browser edge --profile "Personal"
 ```
 
-Use the exact profile display name shown in the browser's profile settings.
-`--browser` selects Chrome or Edge; if omitted, the first installed browser is
-used, with Chrome preferred. Without `--profile`, the temporary session described
-above is used and there is no close-browser prompt.
+After launch, select the requested profile in the browser, open the target URL
+there, and make that tab active. Press Enter in Terminal to start clicking.
+`--profile` is a reminder in this prompt; it does not automatically switch profiles.
+The app follows that specific tab even if you later activate a different tab.
+There is no need to quit existing browser instances. Ctrl+C stops clicking and
+leaves the browser open. Closing the selected tab also stops clicking.
 
-Before opening a named profile, the app asks you to save your work and quit all
-Chrome and Edge instances with **Cmd+Q**, including background instances. Type
-`yes` to continue; any other answer cancels. The app does not force browsers to
-quit or independently verify that you closed them.
+Enable **View → Developer → Allow JavaScript from Apple Events** in the selected
+browser. If macOS asks whether Terminal (or your editor) may control the browser,
+allow it; this permission is managed in **Privacy & Security → Automation**.
+If your browser or organization disables Apple Events JavaScript, native clicking
+will not work. This mode matches visible buttons by `aria-labelledby`,
+`aria-label`, input value, or text, and sends a JavaScript DOM click. It does not
+search frames or shadow roots, and sites requiring trusted physical clicks may
+reject it.
 
-Chrome restricts automation of its normal data directory. The app therefore
-copies the selected profile into a separate data directory on its first use:
-`~/Library/Application Support/Clicker/<chrome-or-edge>/<profile-directory>`.
-Later runs reuse that copy, including logins made in the automation browser.
-Changes are not synchronized with your everyday browser. Encrypted cookies,
-passwords, and managed settings may not transfer; sign in again if necessary.
-The copy contains private browser data, so treat it like your original profile.
-Do not run two clickers using the same automation profile simultaneously.
-
-If your profile is in Edge, include `--browser edge`; otherwise Chrome is chosen
-when both browsers are installed. The app reads profile names from `Local State`
-and falls back to each profile's `Preferences` file when needed. Errors identify
-the selected browser and missing or unreadable metadata; a name mismatch lists
-the names found. For a missing data directory, open `edge://version` in Edge (or
-`chrome://version` in Chrome) and check **Profile Path**. Custom data directories
-and Beta/Dev/Canary browser editions are not currently supported.
+On Linux the app still uses Playwright with a separate temporary browser session.
+Existing browser logins are not shared in that mode. Named profiles are macOS only.
 
 ## Verify
 
