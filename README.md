@@ -1,6 +1,6 @@
-# Browser button clicker
+# Browser element clicker
 
-Python CLI that opens a site and clicks a button repeatedly. Requires Python 3.10+
+Python CLI that opens a site and clicks an element by its text repeatedly. Requires Python 3.10+
 and Google Chrome or Microsoft Edge. On macOS, install the browser in
 `/Applications` or `~/Applications`; Chrome is preferred when both are installed.
 
@@ -58,17 +58,21 @@ In each new Terminal window, return to the repository directory and run
 python clicker.py "https://example.com" "Refresh" 1
 ```
 
-The three positional parameters are the site URL, button label, and interval in
+The three positional parameters are the site URL, element text, and interval in
 seconds. Decimal intervals such as `2.5` work. The first click happens as soon as
-the button is ready; the app waits the requested interval after each completed
+the element is ready; the app waits the requested interval after each completed
 click before clicking again. Page delays can make clicks farther apart. Press **Ctrl+C** in the
-terminal to stop and close the browser.
+terminal to stop. The regular browser stays open on macOS.
 
-The label matches the exact accessible name of a button (including HTML buttons,
-submit inputs, and elements with `role="button"`). It must identify one button
-in the main page. Duplicate names produce an error instead of clicking an
-arbitrary button. Frames and links are not searched. Each click waits up to 30
-seconds for the button to become actionable, then reports an error if it cannot.
+Text matches exactly, is case-sensitive, and ignores extra whitespace. Targets
+can be buttons, links, spans, divs, menu entries, or other visible HTML elements,
+including elements handled by JavaScript event listeners. Accessible labels
+(`aria-label` or `aria-labelledby`) and input values also match. If nested
+elements contain the same text, the innermost match receives the click, which
+bubbles to handlers on its ancestors. Multiple separate matches produce an error.
+Use distinctive text: the app cannot determine whether arbitrary text has a
+click handler. Disabled targets are skipped and the app waits up to 30 seconds
+for a matching target. Frames and shadow roots are not searched.
 
 ## macOS: use your regular browser profile
 
@@ -91,8 +95,7 @@ Enable **View → Developer → Allow JavaScript from Apple Events** in the sele
 browser. If macOS asks whether Terminal (or your editor) may control the browser,
 allow it; this permission is managed in **Privacy & Security → Automation**.
 If your browser or organization disables Apple Events JavaScript, native clicking
-will not work. This mode matches visible buttons by `aria-labelledby`,
-`aria-label`, input value, or text, and sends a JavaScript DOM click. It does not
+will not work. The app sends a JavaScript DOM click in both modes. It does not
 search frames or shadow roots, and sites requiring trusted physical clicks may
 reject it.
 

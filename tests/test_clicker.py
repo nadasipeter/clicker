@@ -51,6 +51,30 @@ class NativeTest(unittest.TestCase):
 
 
 class BrowserTest(unittest.TestCase):
+    def test_clicks_links_custom_elements_and_nested_text(self):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=clicker.find_browser(), headless=True)
+            page = browser.new_page()
+            examples = [
+                '<a href="#" onclick="window.clicked++">Refresh</a>',
+                '<div onclick="window.clicked++"><span>Refresh</span></div>',
+                '<div id="parent"><span>Refresh</span></div><script>document.getElementById("parent").addEventListener("click", () => window.clicked++);</script>',
+                '<button onclick="window.clicked++"><span> Refresh </span></button>',
+                '<div role="link" aria-label="Refresh" onclick="window.clicked++">Icon</div>',
+            ]
+            for html in examples:
+                with self.subTest(html=html):
+                    page.set_content('<script>window.clicked=0</script>' + html)
+                    self.assertEqual(page.evaluate(clicker.native_click_script("Refresh")), "clicked")
+                    self.assertEqual(page.evaluate("window.clicked"), 1)
+            page.set_content('<a href="#">Refresh</a><div onclick="">Refresh</div>')
+            self.assertEqual(page.evaluate(clicker.native_click_script("Refresh")), "ambiguous")
+            page.set_content('<button disabled><span>Refresh</span></button>')
+            self.assertEqual(page.evaluate(clicker.native_click_script("Refresh")), "waiting")
+            page.set_content('<span style="display:none">Refresh</span><a href="#">Refresh</a>')
+            self.assertEqual(page.evaluate(clicker.native_click_script("Refresh")), "clicked")
+            browser.close()
+
     def test_repeated_clicks_relocate_button_and_respect_interval(self):
         import time
         real_sleep = time.sleep

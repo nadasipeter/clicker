@@ -1,4 +1,4 @@
-"""Click a browser button repeatedly by its accessible label."""
+"""Click a browser element repeatedly by its text or accessible label."""
 
 import argparse
 import json
@@ -54,15 +54,21 @@ def find_browser(browser_name=None):
 
 
 def click_repeatedly(page, label, interval):
-    # A locator is resolved again on every click, including after page updates.
-    button = page.get_by_role("button", name=label, exact=True)
     count = 0
+    deadline = time.monotonic() + 30
     while not page.is_closed():
-        button.click(timeout=30_000)
-        count += 1
-        print(f"Clicked {label!r} ({count})", flush=True)
-        # Slow page actions never cause a burst of catch-up clicks.
-        time.sleep(interval)
+        result = page.evaluate(native_click_script(label))
+        if result == "ambiguous":
+            raise RuntimeError("Multiple elements match the text; use unique text.")
+        if result == "clicked":
+            count += 1
+            print(f"Clicked {label!r} ({count})", flush=True)
+            time.sleep(interval)
+            deadline = time.monotonic() + 30
+        elif time.monotonic() < deadline:
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("The target element was not ready within 30 seconds.")
 
 
 def native_click_script(label):
@@ -70,16 +76,27 @@ def native_click_script(label):
     return """(() => {
       const normalize = s => s.replace(/\\s+/g, ' ').trim();
       const label = normalize(LABEL);
-      const buttons = [...document.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"]')]
-        .filter(b => b.getClientRects().length && getComputedStyle(b).visibility !== 'hidden')
+      const visible = b => b.getClientRects().length &&
+        !['hidden', 'collapse'].includes(getComputedStyle(b).visibility);
+      const matches = [...document.querySelectorAll('body *')]
+        .filter(b => typeof b.click === 'function' && !b.matches('script, style, template, noscript') && visible(b))
         .filter(b => {
           const ids = (b.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean);
           const referenced = ids.map(id => document.getElementById(id)?.textContent || '').join(' ');
-          return normalize(referenced || b.getAttribute('aria-label') || b.value || b.textContent || '') === label;
+          const accessible = referenced || b.getAttribute('aria-label') || '';
+          const text = b instanceof HTMLInputElement ? b.value : (b.innerText || '');
+          return normalize(accessible) === label || normalize(text) === label;
         });
-      if (buttons.length > 1) return 'ambiguous';
-      if (!buttons.length || buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true') return 'waiting';
-      buttons[0].click(); return 'clicked';
+      // Text wrappers are not separate targets. Keep the innermost match so
+      // click events bubble to native or delegated handlers on its ancestors.
+      const elements = matches.filter(b => !matches.some(other => other !== b && b.contains(other)));
+      if (elements.length > 1) return 'ambiguous';
+      if (!elements.length) return 'waiting';
+      const target = elements[0];
+      if (target.closest(':disabled, [aria-disabled="true"], [inert]') ||
+          getComputedStyle(target).pointerEvents === 'none') return 'waiting';
+      target.scrollIntoView({block: 'center', inline: 'center'});
+      target.click(); return 'clicked';
     })()""".replace("LABEL", json.dumps(label))
 
 
@@ -130,7 +147,7 @@ def run_native(executable, url, label, interval, profile_name=None):
         if result == "closed":
             return
         if result == "ambiguous":
-            raise RuntimeError("Multiple buttons match the label; use a unique label.")
+            raise RuntimeError("Multiple elements match the text; use unique text.")
         if result == "clicked":
             count += 1
             print(f"Clicked {label!r} ({count})", flush=True)
@@ -139,19 +156,19 @@ def run_native(executable, url, label, interval, profile_name=None):
         elif result == "waiting" and time.monotonic() < deadline:
             time.sleep(0.25)
         else:
-            raise RuntimeError("The target button was not ready within 30 seconds.")
+            raise RuntimeError("The target element was not ready within 30 seconds.")
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Open a site and repeatedly click a button. Press Ctrl+C to stop.")
+    parser = argparse.ArgumentParser(description="Open a site and repeatedly click an element by text. Press Ctrl+C to stop.")
     parser.add_argument("site_url", type=site_url)
-    parser.add_argument("button_label", help="Exact accessible button name (usually its visible text)")
+    parser.add_argument("button_label", metavar="element_text", help="Exact visible text or accessible label of the element")
     parser.add_argument("interval", type=positive_interval, help="Seconds between clicks, e.g. 1 or 2.5")
     parser.add_argument("--profile", help="Profile display name; macOS native mode asks you to select it in the browser")
     parser.add_argument("--browser", choices=("chrome", "edge"), help="Choose Chrome or Edge (default: first installed)")
     args = parser.parse_args(argv)
     if not args.button_label.strip():
-        parser.error("button label must not be empty")
+        parser.error("element text must not be empty")
     try:
         executable = find_browser(args.browser)
         if sys.platform == "darwin":
@@ -164,7 +181,7 @@ def main(argv=None):
             try:
                 page = browser.new_page()
                 page.goto(args.site_url, wait_until="domcontentloaded")
-                print("Waiting for the button. Press Ctrl+C to stop.", flush=True)
+                print("Waiting for the element. Press Ctrl+C to stop.", flush=True)
                 click_repeatedly(page, args.button_label, args.interval)
             finally:
                 browser.close()
