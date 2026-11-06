@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -29,6 +30,44 @@ class ArgumentsTest(unittest.TestCase):
             edge.touch()
             with patch.object(Path, "home", return_value=root):
                 self.assertEqual(clicker.find_browser(), str(edge))
+
+
+class ProfileTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        self.source = self.home / "Library/Application Support/Google/Chrome"
+        (self.source / "Profile 1").mkdir(parents=True)
+        (self.source / "Local State").write_text(json.dumps({
+            "profile": {"info_cache": {"Profile 1": {"name": "Personal"}}}
+        }))
+        (self.source / "Profile 1/Preferences").write_text("original")
+        for target, value in (("clicker.sys.platform", "darwin"), ("clicker.Path.home", self.home)):
+            mock = patch(target, return_value=value) if target.endswith("home") else patch(target, value)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def test_copy_is_persistent_and_source_is_unchanged(self):
+        with patch("builtins.input", return_value="yes") as prompt:
+            destination, directory = clicker.prepare_profile("Google Chrome", "Personal")
+        self.assertIn("quit ALL Chrome and Edge", prompt.call_args.args[0])
+        self.assertEqual(directory, "Profile 1")
+        copied = destination / directory / "Preferences"
+        self.assertEqual(copied.read_text(), "original")
+        copied.write_text("automation changes")
+        with patch("builtins.input", return_value="yes"):
+            self.assertEqual(clicker.prepare_profile("Google Chrome", "Personal"), (destination, directory))
+        self.assertEqual(copied.read_text(), "automation changes")
+        self.assertEqual((self.source / directory / "Preferences").read_text(), "original")
+
+    def test_cancel_and_missing_name_create_no_copy(self):
+        with patch("builtins.input", return_value="no"), self.assertRaisesRegex(RuntimeError, "Cancelled"):
+            clicker.prepare_profile("Google Chrome", "Personal")
+        with patch("builtins.input") as prompt, self.assertRaisesRegex(RuntimeError, "found 0"):
+            clicker.prepare_profile("Google Chrome", "Missing")
+        prompt.assert_not_called()
+        self.assertFalse((self.home / "Library/Application Support/Clicker").exists())
 
 
 class BrowserTest(unittest.TestCase):

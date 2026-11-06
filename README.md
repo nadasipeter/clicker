@@ -74,6 +74,32 @@ The browser opens a separate temporary session; existing browser logins are not
 shared. You can log in manually in the opened window before the button wait
 expires. Closing the window also stops clicking.
 
+## Use a named profile (macOS)
+
+```sh
+python clicker.py "https://example.com" "Refresh" 1 --browser chrome --profile "Personal"
+python clicker.py "https://example.com" "Refresh" 1 --browser edge --profile "Work"
+```
+
+Use the exact profile display name shown in the browser's profile settings.
+`--browser` selects Chrome or Edge; if omitted, the first installed browser is
+used, with Chrome preferred. Without `--profile`, the temporary session described
+above is used and there is no close-browser prompt.
+
+Before opening a named profile, the app asks you to save your work and quit all
+Chrome and Edge instances with **Cmd+Q**, including background instances. Type
+`yes` to continue; any other answer cancels. The app does not force browsers to
+quit or independently verify that you closed them.
+
+Chrome restricts automation of its normal data directory. The app therefore
+copies the selected profile into a separate data directory on its first use:
+`~/Library/Application Support/Clicker/<chrome-or-edge>/<profile-directory>`.
+Later runs reuse that copy, including logins made in the automation browser.
+Changes are not synchronized with your everyday browser. Encrypted cookies,
+passwords, and managed settings may not transfer; sign in again if necessary.
+The copy contains private browser data, so treat it like your original profile.
+Do not run two clickers using the same automation profile simultaneously.
+
 ## Verify
 
 ```sh
